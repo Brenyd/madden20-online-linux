@@ -31,7 +31,11 @@
 #include "common/spin_lock.h"
 #endif
 
+#include <atomic>
+#include <mutex>
+#include <unordered_map>
 #ifdef __linux__
+#include <ucontext.h>
 #include "common/adaptive_mutex.h"
 #else
 #include "common/spin_lock.h"
@@ -238,9 +242,16 @@ struct PageManager::Impl {
         const u64 tag = it->second;
         trap_pages.erase(it);
         self->Protect(page << PM_PAGE_BITS, PM_PAGE_SIZE, self->cached_pages[page].Perms());
-        const auto* ep = reinterpret_cast<EXCEPTION_POINTERS*>(context);
+#ifdef _WIN64
+        const u64 rip = reinterpret_cast<EXCEPTION_POINTERS*>(context)->ContextRecord->Rip;
+#elif defined(__linux__) && defined(ARCH_X86_64)
+        const u64 rip = static_cast<u64>(
+            reinterpret_cast<ucontext_t*>(context)->uc_mcontext.gregs[REG_RIP]);
+#else
+        const u64 rip = 0;
+#endif
         LOG_WARNING(Render, "READTRAP {} addr={:#x} rip={:#x} tag={:x} left={}",
-                    Common::IsWriteError(context) ? "W" : "R", addr, ep->ContextRecord->Rip, tag,
+                    Common::IsWriteError(context) ? "W" : "R", addr, rip, tag,
                     trap_pages.size());
         return true;
     }

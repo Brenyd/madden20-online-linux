@@ -58,7 +58,8 @@ sudo apt install build-essential clang cmake ninja-build git python3 python3-cry
     libpipewire-0.3-dev libssl-dev zlib1g-dev libpng-dev libusb-1.0-0-dev libudev-dev
 ```
 
-Clang 18 or newer. The build needs network access for the submodules (and, if your system has no abseil, protobuf
+Clang 19 or newer and GCC 14+ (for its C++ standard library) — Arch/CachyOS/Fedora 41+ already have them. On
+Ubuntu 24.04 / Mint 22 add `clang-19 g++-14` and run `CC=clang-19 CXX=clang++-19 linux/build.sh`. The build needs network access for the submodules (and, if your system has no abseil, protobuf
 fetches it). `JOBS=4 linux/build.sh` limits parallel jobs on low-RAM machines; `linux/build.sh --stage` re-packs
 without recompiling.
 

@@ -24,9 +24,19 @@ say() { printf '\033[1;32m==>\033[0m %s\n' "$*"; }
 die() { printf '\033[1;31mERROR:\033[0m %s\n' "$*" >&2; exit 1; }
 
 if (( ! STAGE_ONLY )); then
-    for t in clang clang++ cmake ninja git python3; do
+    CC="${CC:-clang}"; CXX="${CXX:-clang++}"
+    for t in "$CC" "$CXX" cmake ninja git python3; do
         command -v "$t" >/dev/null || die "missing '$t' - see the dependency list at the top of this script"
     done
+    # The core is C++23: clang 19+ (relaxed constexpr) and a libstdc++ with std::ranges::to (GCC 14+).
+    clang_major=$("$CXX" -dumpversion | cut -d. -f1)
+    (( clang_major >= 19 )) || die "$CXX is clang $clang_major; clang 19 or newer is needed (Ubuntu 24.04: apt install clang-19 g++-14, then CC=clang-19 CXX=clang++-19 linux/build.sh)"
+    echo '#include <ranges>
+#include <vector>
+int main(){auto v=std::views::iota(0,3)|std::ranges::to<std::vector>();return v.size()!=3;}' > /tmp/m20_ranges_check.cpp
+    "$CXX" -std=c++23 -o /dev/null /tmp/m20_ranges_check.cpp 2>/dev/null \
+        || die "your C++ standard library lacks std::ranges::to - install GCC 14+ (libstdc++) alongside clang"
+    rm -f /tmp/m20_ranges_check.cpp
 
     say "Fetching emulator submodules (pinned commits)"
     cd "$REPO"
@@ -39,7 +49,7 @@ if (( ! STAGE_ONLY )); then
     say "Configuring the patched shadPS4 core (clang, Release, Madden fixes on)"
     cmake -S "$EMU" -B "$BUILD" -G Ninja \
         -DCMAKE_BUILD_TYPE=Release \
-        -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ \
+        -DCMAKE_C_COMPILER="$CC" -DCMAKE_CXX_COMPILER="$CXX" \
         -DENABLE_NBA_2K14_COMPATIBILITY=ON \
         -DENABLE_UPDATER=OFF \
         -DENABLE_DISCORD_RPC=OFF \
