@@ -20,6 +20,14 @@ Three parts:
    installed copy = launcher (starts both servers, runs shadPS4, stops servers when the game exits). The same exe runs
    the servers/tools with its bundled Python: `--serve http|blaze`, `--tool NAME`.
 
+## Linux port (this fork)
+`linux/build.sh` builds the core natively (clang, `ENABLE_NBA_2K14_COMPATIBILITY=ON`) and stages `build/payload` +
+`dist/Madden20Online-linux-x86_64.tar.gz`; `linux/setup.sh` runs the installer from it. `installer/madden20_online.py`
+is cross-platform (`IS_WIN`): Linux core = `core/shadps4`, launcher = `<install>/madden20-online` sh wrapper, shortcut
+= .desktop entry. The HTTPS catch-all listens on :42443 on Linux and the core's EAREDIRECT maps redirected
+`*.ea.com:443` to `MADDEN_HTTPS_PORT` (set by the launcher; unset = :443, the Windows behaviour). The CMake
+`-ffile-prefix-map` option is passed plainly for non-MSVC clang. See linux/README.md.
+
 ## Install layout (what the setup exe creates)
 ```
 Madden20Online\

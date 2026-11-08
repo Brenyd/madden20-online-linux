@@ -1,8 +1,10 @@
 """Madden 20 local EA HTTP(S) endpoints.
 - :42230 HTTPS  Blaze redirector  POST /redirector/getServerInstance  (XML)
 - :443   HTTPS  catch-all (telemetry pin-river / rl.data bugsentry) -> 200 {}
+          (Linux: :42443 instead - binding :443 needs root; the core's EAREDIRECT follows MADDEN_HTTPS_PORT)
 - --plain PORT  plain HTTP side server (PC: platform_cfg.HTTP_BASE): DP tuning/LCU, telemetry, card art (netres.py)
-    python http_server.py 42230 443 --plain 42240
+    python http_server.py 42230 443 --plain 42240        (Windows)
+    python http_server.py 42230 42443 --plain 42240      (Linux)
 TLS cert: certs/pc_server.crt (issued by our stand-in "GOS 2015 CA", tools/pc/make_gos_ca.py) when present,
 else the old self-signed certs/ea.crt (shadPS4 never verified).
 Every request is logged to logs/http/<n>_<port>_<path>.txt (headers + body) and to stdout.
@@ -173,7 +175,7 @@ if __name__ == "__main__":
         i = args.index("--plain")
         plain.append(int(args[i + 1]))
         del args[i:i + 2]
-    ports = [int(p) for p in args] or [42230, 443]
+    ports = [int(p) for p in args] or [42230, 443 if os.name == "nt" else 42443]
     for p in ports:
         threading.Thread(target=serve, args=(p,), daemon=True).start()
     for p in plain:

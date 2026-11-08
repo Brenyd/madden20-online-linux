@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include "core/nba_2k14_compatibility.h"
+#include <cstdlib>
 #include <atomic>
 #include <cctype>
 #include <chrono>
@@ -743,9 +744,20 @@ static s32 RunRealHttpRequest(const SendRequestPlan& plan_in, HttpResponse& out_
         static const bool ea_redirect = Core::Nba2K14Compatibility::Flag("EAREDIRECT");
         const bool redirected = ea_redirect && plan.host.ends_with("ea.com");
         std::string base_url = plan.scheme + "://" + (redirected ? std::string("127.0.0.1") : plan.host);
-        if ((plan.scheme == "https" && plan.port != 443) ||
-            (plan.scheme == "http" && plan.port != 80)) {
-            base_url += ":" + std::to_string(plan.port);
+        // Linux port: binding :443 needs root there, so MADDEN_HTTPS_PORT (set by the launcher) moves the
+        // redirected default-HTTPS endpoint to an unprivileged port. Unset = original behaviour.
+        static const u16 redirect_https_port = [] {
+            const char* env = std::getenv("MADDEN_HTTPS_PORT");
+            const int v = env ? std::atoi(env) : 0;
+            return static_cast<u16>((v > 0 && v < 65536) ? v : 443);
+        }();
+        u16 connect_port = plan.port;
+        if (redirected && plan.scheme == "https" && plan.port == 443) {
+            connect_port = redirect_https_port;
+        }
+        if ((plan.scheme == "https" && connect_port != 443) ||
+            (plan.scheme == "http" && connect_port != 80)) {
+            base_url += ":" + std::to_string(connect_port);
         }
         if (redirected) {
             LOG_INFO(Lib_Http, "EAREDIRECT {}://{}:{} -> {}", plan.scheme, plan.host, plan.port, base_url);

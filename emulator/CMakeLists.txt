@@ -44,8 +44,15 @@ option(ENABLE_NBA_2K14_COMPATIBILITY
        "Enable the Windows runtime compatibility path for NBA 2K14" OFF)
 
 if(ENABLE_NBA_2K14_COMPATIBILITY AND CMAKE_CXX_COMPILER_ID MATCHES "Clang")
-    add_compile_options(
-        "$<$<COMPILE_LANGUAGE:C,CXX>:/clang:-ffile-prefix-map=${CMAKE_SOURCE_DIR}=.>")
+    if(MSVC)
+        # clang-cl: forward the option to the clang driver.
+        add_compile_options(
+            "$<$<COMPILE_LANGUAGE:C,CXX>:/clang:-ffile-prefix-map=${CMAKE_SOURCE_DIR}=.>")
+    else()
+        # Linux/macOS clang: plain GCC-style option (a /clang: prefix would be read as a file name).
+        add_compile_options(
+            "$<$<COMPILE_LANGUAGE:C,CXX>:-ffile-prefix-map=${CMAKE_SOURCE_DIR}=.>")
+    endif()
 endif()
 
 # First, determine whether to use CMAKE_OSX_ARCHITECTURES or CMAKE_SYSTEM_PROCESSOR.

@@ -9,6 +9,12 @@ Installed (settings.json next to the exe): launcher window. "Download card data"
 catalog + card art from Muthead; "Play" starts both local servers, runs the game, and stops the servers when the
 game exits.
 
+Linux: the same script runs from source with the system Python (python3 + tkinter + cryptography + Pillow);
+installer/../linux/build.sh stages build/payload with a native shadps4. Differences from Windows: the core is
+core/shadps4, the default-HTTPS catch-all listens on an unprivileged port (MADDEN_HTTPS_PORT, honoured by the
+patched core's EAREDIRECT) instead of :443, the shortcut is a .desktop entry, and the launcher is
+<install>/madden20-online (a small sh wrapper around madden20_online.py).
+
 Internal modes (the exe re-invokes itself):
   --serve http|blaze     run server/http_server.py or server/blaze_server.py with this exe's bundled Python
   --tool NAME [ARGS..]   run tools/NAME.py (card scraper / parser / art tools)
@@ -24,17 +30,28 @@ import subprocess
 import sys
 import threading
 import time
-import tkinter as tk
 from pathlib import Path
-from tkinter import filedialog, messagebox, ttk
 
+try:
+    import tkinter as tk
+    from tkinter import filedialog, messagebox, ttk
+except ImportError:                # headless Linux: CLI modes still work
+    tk = None
+    filedialog = messagebox = ttk = None
+
+IS_WIN = os.name == "nt"
 APP = "Madden 20 Online"
-EXE_NAME = "Madden20Online.exe"
+EXE_NAME = "Madden20Online.exe" if IS_WIN else "madden20-online"
+CORE_NAME = "shadps4.exe" if IS_WIN else "shadps4"
 TITLE_ID = "CUSA13265"
 APP_VER = "01.00"
 EBOOT_MD5 = "c973befec7acd462d31d084743d1b513"      # US base game 01.00 (the build every fix was made against)
-BLAZE_PORT, HTTPS_PORTS, PLAIN_PORT = 10041, (42230, 443), 42240
-NO_WINDOW = 0x08000000                                 # CREATE_NO_WINDOW
+# Linux: :443 needs root, so the catch-all moves to 42443 and the core is told via MADDEN_HTTPS_PORT.
+LINUX_HTTPS_PORT = 42443
+BLAZE_PORT, PLAIN_PORT = 10041, 42240
+HTTPS_PORTS = (42230, 443) if IS_WIN else (42230, LINUX_HTTPS_PORT)
+NO_WINDOW = 0x08000000 if IS_WIN else 0                # CREATE_NO_WINDOW (Windows only)
+UI_FONT = "Segoe UI" if IS_WIN else "TkDefaultFont"
 
 
 def _bundle_imports():
@@ -77,8 +94,11 @@ def install_root():
 
 
 def payload_dir():
-    base = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent.parent / "build"))
-    return base / "payload"
+    if hasattr(sys, "_MEIPASS"):
+        return Path(sys._MEIPASS) / "payload"
+    if os.environ.get("MADDEN_PAYLOAD"):
+        return Path(os.environ["MADDEN_PAYLOAD"])
+    return Path(__file__).resolve().parent.parent / "build" / "payload"
 
 
 def self_cmd(*args):
@@ -87,7 +107,10 @@ def self_cmd(*args):
 
 def ansi_safe(path):
     """shadPS4 takes paths through narrow (ANSI code page) APIs - argv for -g, getenv for the mod root, fopen for the
-    flags. A character outside this PC's code page cannot reach it intact (mbcs strict = no best-fit guessing)."""
+    flags. A character outside this PC's code page cannot reach it intact (mbcs strict = no best-fit guessing).
+    Linux passes paths as raw bytes, so anything goes."""
+    if not IS_WIN:
+        return True
     try:
         str(path).encode("mbcs", errors="strict")
         return True
@@ -96,6 +119,8 @@ def ansi_safe(path):
 
 
 def default_install_dir():
+    if not IS_WIN:
+        return Path.home() / "Madden20Online"
     home = Path(os.path.expandvars(r"%USERPROFILE%"))
     if ansi_safe(home):
         return home / "Madden20Online"
@@ -106,7 +131,7 @@ def check_install_dir(path):
     """-> error message, or None if the folder can be created and written and the emulator can take its path."""
     p = Path(path)
     if not str(path).strip() or not p.is_absolute():
-        return "Pick a full install folder path (for example C:\\Madden20Online)."
+        return f"Pick a full install folder path (for example {default_install_dir()})."
     if not ansi_safe(p):
         return (f"The install folder path has characters this PC's language setting can't pass to the emulator:\n{p}\n"
                 "Pick a folder whose path uses only plain letters, e.g. C:\\Madden20Online.")
@@ -116,7 +141,7 @@ def check_install_dir(path):
         probe.write_text("ok")
         probe.unlink()
     except OSError as e:
-        return f"Can't write to {p} ({e.strerror}). Pick a folder you own, e.g. C:\\Madden20Online (not Program Files)."
+        return f"Can't write to {p} ({e.strerror}). Pick a folder you own, e.g. {default_install_dir()}."
     return None
 
 
@@ -174,7 +199,7 @@ def check_game(folder):
             f = cand
             break
     else:
-        return False, "No eboot.bin + sce_sys\\param.sfo found. Pick the extracted CUSA13265 game folder.", None
+        return False, "No eboot.bin + sce_sys/param.sfo found. Pick the extracted CUSA13265 game folder.", None
     if not ansi_safe(f):
         return False, (f"The game folder path has characters this PC's language setting can't pass to the emulator:\n"
                        f"{f}\nMove or rename it so the path uses only plain letters, e.g. E:\\Games\\CUSA13265."), None
@@ -198,6 +223,46 @@ def write_emulator_config(install, fullscreen):
     tmpl["GPU"]["full_screen"] = bool(fullscreen)
     (user / "config.json").write_text(json.dumps(tmpl, indent=4), encoding="utf-8")
     shutil.copy2(payload_dir() / "templates" / "CUSA13265.json", user / "custom_configs" / "CUSA13265.json")
+
+
+def make_shortcut_linux(target, name):
+    """App-menu entry (~/.local/share/applications) plus a copy on the Desktop if there is one."""
+    icon = target.parent / "madden20-online.png"
+    entry = ("[Desktop Entry]\nType=Application\n"
+             f"Name={name}\nComment=Madden NFL 20 Ultimate Team on a local server\n"
+             f'Exec="{target}"\nPath={target.parent}\n'
+             + (f"Icon={icon}\n" if icon.exists() else "Icon=applications-games\n")
+             + "Terminal=false\nCategories=Game;\n")
+    ok = False
+    xdg_data = Path(os.environ.get("XDG_DATA_HOME") or Path.home() / ".local" / "share")
+    for d in (xdg_data / "applications", Path(_xdg_desktop())):
+        if d.is_dir() or d.parent == xdg_data:
+            try:
+                d.mkdir(parents=True, exist_ok=True)
+                f = d / "madden20-online.desktop"
+                f.write_text(entry, encoding="utf-8")
+                f.chmod(0o755)
+                ok = True
+            except OSError:
+                pass
+    return ok
+
+
+def _xdg_desktop():
+    try:
+        out = subprocess.run(["xdg-user-dir", "DESKTOP"], capture_output=True, text=True, check=False).stdout.strip()
+        if out:
+            return out
+    except OSError:
+        pass
+    return str(Path.home() / "Desktop")
+
+
+def open_folder(path):
+    if IS_WIN:
+        os.startfile(path)  # noqa: S606
+    else:
+        subprocess.Popen(["xdg-open", str(path)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 
 def make_shortcut(target, name):
@@ -253,19 +318,37 @@ def install(install_dir, game_eboot, fullscreen, with_art, shortcut, log, done):
         write_emulator_config(install, fullscreen)
         if frozen():
             shutil.copy2(sys.executable, install / EXE_NAME)
+        elif not IS_WIN:
+            install_linux_launcher(install)
         s = {"game_eboot": str(game_eboot), "fullscreen": bool(fullscreen), "cards_ready": False}
         save_settings(install, s)
         log("Generating a local TLS certificate...")
         if run_logged(self_cmd("--tool", "make_cert"), log, cwd=install) != 0 or                 not (install / "server" / "certs" / "ea.crt").exists():
             raise RuntimeError("certificate generation failed")
-        if shortcut and frozen():
-            log("Desktop shortcut created." if make_shortcut(install / EXE_NAME, APP) else
+        if shortcut and (frozen() or not IS_WIN):
+            made = make_shortcut(install / EXE_NAME, APP) if IS_WIN else make_shortcut_linux(install / EXE_NAME, APP)
+            log("Desktop shortcut created." if made else
                 f"Could not create the desktop shortcut - start {install / EXE_NAME} directly.")
         log("Installed. Open the launcher and click 'Download card data' once before playing Ultimate Team.")
         done(True, install)
     except Exception as e:  # noqa: BLE001
         log(f"ERROR: {e}")
         done(False, None)
+
+
+def install_linux_launcher(install):
+    """Copy this script into the install folder and add an sh wrapper, so the install runs on its own."""
+    shutil.copy2(Path(__file__).resolve(), install / "madden20_online.py")
+    w = install / EXE_NAME
+    w.write_text('#!/bin/sh\n# Madden 20 Online launcher (Linux)\ncd "$(dirname "$0")" || exit 1\n'
+                 'exec "${PYTHON:-python3}" -I madden20_online.py "$@"\n', encoding="utf-8")
+    w.chmod(0o755)
+    core = install / "core" / CORE_NAME
+    if core.exists():
+        core.chmod(core.stat().st_mode | 0o111)
+    icon = payload_dir() / "madden20-online.png"
+    if icon.exists():
+        shutil.copy2(icon, install / icon.name)
 
 
 # ---------------------------------------------------------------- play
@@ -289,14 +372,15 @@ def play(install, log):
         return
     if not ansi_safe(install):
         log(f"The install folder path ({install}) can't be passed to the emulator on this PC. Reinstall to a plain "
-            "path such as C:\\Madden20Online.")
+            f"path such as {default_install_dir()}.")
         return
     if not (install / "mutdata" / "cards.json").exists():
         log("Card data missing - click 'Download card data' first.")
         return
     busy = [p for p in (*HTTPS_PORTS, PLAIN_PORT, BLAZE_PORT) if not port_free(p)]
     if busy:
-        log(f"Ports in use: {busy}. Close whatever uses them (another server copy, IIS/VMware on 443) and retry.")
+        log(f"Ports in use: {busy}. Close whatever uses them (another server copy" +
+            (", IIS/VMware on 443" if IS_WIN else "") + ") and retry.")
         return
     env = dict(os.environ, MADDEN_PLATFORM="ps4", MADDEN_VERBOSE="0", MADDEN_ROOT=str(install))
     logs = install / "server" / "logs"
@@ -308,23 +392,35 @@ def play(install, log):
                                     stderr=subprocess.STDOUT, creationflags=NO_WINDOW))
     time.sleep(2)
     if any(p.poll() is not None for p in srv):
-        log("A server failed to start - see server\\logs\\*_console.log")
+        log(f"A server failed to start - see {logs / '*_console.log'}")
         for p in srv:
             p.kill()
         return
     log("Servers running. Starting Madden NFL 20...")
     genv = dict(os.environ, NBA2K14_MOD_ROOT=str(install / "modroot"))
+    if not IS_WIN:
+        genv["MADDEN_HTTPS_PORT"] = str(LINUX_HTTPS_PORT)
     core = install / "core"
-    game = subprocess.Popen([str(core / "shadps4.exe"), "-g", s["game_eboot"], "-f",
+    if not (core / CORE_NAME).exists():
+        log(f"Emulator missing: {core / CORE_NAME}. Reinstall.")
+        for p in srv:
+            p.terminate()
+        return
+    game = subprocess.Popen([str(core / CORE_NAME), "-g", s["game_eboot"], "-f",
                              "true" if s.get("fullscreen", True) else "false"], cwd=core, env=genv)
     game.wait()
     log(f"Game closed (exit {game.returncode}). Stopping servers.")
     for p in srv:
         p.terminate()
+    for p in srv:
+        try:
+            p.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            p.kill()
 
 
 # ---------------------------------------------------------------- UI
-class Window(tk.Tk):
+class Window(tk.Tk if tk else object):
     def __init__(self):
         super().__init__()
         self.title(APP)
@@ -349,7 +445,7 @@ class Window(tk.Tk):
     def build_setup(self):
         f = ttk.Frame(self, padding=12)
         f.pack(fill="both", expand=True)
-        ttk.Label(f, text=f"{APP} - setup", font=("Segoe UI", 14, "bold")).grid(row=0, column=0, columnspan=3,
+        ttk.Label(f, text=f"{APP} - setup", font=(UI_FONT, 14, "bold")).grid(row=0, column=0, columnspan=3,
                                                                               sticky="w")
         ttk.Label(f, text="You need your own extracted Madden NFL 20 PS4 game (CUSA13265, version 01.00). "
                           "The game files are not modified.", wraplength=660).grid(row=1, column=0, columnspan=3,
@@ -414,7 +510,7 @@ class Window(tk.Tk):
     def build_launcher(self):
         f = ttk.Frame(self, padding=12)
         f.pack(fill="both", expand=True)
-        ttk.Label(f, text=APP, font=("Segoe UI", 14, "bold")).pack(anchor="w")
+        ttk.Label(f, text=APP, font=(UI_FONT, 14, "bold")).pack(anchor="w")
         bar = ttk.Frame(f)
         bar.pack(fill="x", pady=8)
         self.playb = ttk.Button(bar, text="Play", command=self.do_play)
@@ -424,7 +520,7 @@ class Window(tk.Tk):
         ttk.Checkbutton(bar, text="incl. card art (~1 GB)", variable=self.art).pack(side="left")
         self.full = tk.BooleanVar(value=self.installed.get("fullscreen", True))
         ttk.Checkbutton(bar, text="Fullscreen", variable=self.full, command=self.save_full).pack(side="left", padx=6)
-        ttk.Button(bar, text="Open install folder", command=lambda: os.startfile(exe_dir())).pack(side="right")
+        ttk.Button(bar, text="Open install folder", command=lambda: open_folder(exe_dir())).pack(side="right")
         ttk.Button(bar, text="Game folder...", command=self.change_game).pack(side="right", padx=6)
         self.text.pack(in_=f, fill="both", expand=True)
         if not (exe_dir() / "mutdata" / "cards.json").exists():
@@ -503,6 +599,11 @@ def main():
         s["cards_ready"] = ok
         save_settings(exe_dir(), s)
         sys.exit(0 if ok else 1)
+    try:
+        import tkinter  # noqa: F401
+    except ImportError:
+        sys.exit("tkinter is missing - install your distro's Tk package for Python (Arch: tk, Debian/Ubuntu: "
+                 "python3-tk, Fedora: python3-tkinter), or use --install / --play / --download-cards.")
     Window().mainloop()
 
 

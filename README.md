@@ -1,4 +1,7 @@
-# Madden 20 Online
+# Madden 20 Online (Linux fork)
+
+> **This fork adds a native Linux build** — same local server and patched shadPS4 core, compiled for Linux, no Wine.
+> Linux instructions: **[linux/README.md](linux/README.md)**. The Windows instructions below still apply to Windows.
 
 Play Madden NFL 20 Ultimate Team again — Draft Champions, H2H Seasons vs CPU, packs and the store — on your PC, with a local server and a patched shadPS4.
 
